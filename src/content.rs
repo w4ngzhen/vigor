@@ -1,10 +1,10 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use unicode_width::UnicodeWidthChar;
 
 #[derive(Default)]
 pub struct Content {
     pub lines: Vec<Vec<char>>,
-    line_feed: Option<String>,
+    pub line_feed: Option<String>,
 }
 
 impl Content {

@@ -1,5 +1,6 @@
 use ratatui::prelude::Rect;
 
+#[derive(Default)]
 pub struct Viewport {
     pub anchor_col: i32,
     pub anchor_row: i32,

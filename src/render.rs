@@ -1,18 +1,19 @@
 use crate::content::Content;
 use crate::viewport::Viewport;
-use ratatui::Frame;
-use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::prelude::{Line, Widget};
+use ratatui::prelude::*;
 use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
+use ratatui::Frame;
 use unicode_width::UnicodeWidthChar;
 
+#[derive(Copy, Clone)]
 pub enum CharType {
     Normal,
     Invisible,
 }
 
+#[derive(Clone)]
 pub struct RenderTerm {
     src_char: char,
     char_type: CharType,
@@ -68,9 +69,12 @@ fn get_unicode_string(c: char) -> String {
     format!("U+{:X}", code_point)
 }
 
+/// 实际渲染的一行
 pub struct RenderLine {
+    /// terms
     pub terms: Vec<RenderTerm>,
-    pub break_pos: Vec<usize>,
+    /// 源行索引
+    pub src_line_index: usize,
 }
 
 pub struct RenderContent {
@@ -84,7 +88,7 @@ impl RenderContent {
         tab_width: usize,
     ) -> Self {
         let Viewport {
-            anchor_col,
+            anchor_col: _,
             anchor_row,
             width,
             height,
@@ -102,37 +106,53 @@ impl RenderContent {
             (anchor_row + height as i32).max(0) as usize
         };
 
-        let mut render_lines: Vec<RenderLine> = Vec::new();
+        let mut fill_rows = height as usize;
+        let mut render_lines: Vec<RenderLine> = Vec::with_capacity(fill_rows);
+
+        let mut terms = Vec::new();
+        let mut curr_render_line_width_remain = width;
+
         for row in start_row..=end_row {
-            let mut render_line = RenderLine {
-                terms: Vec::new(),
-                break_pos: Vec::new(),
-            };
+            let src_line = &src_content.lines[row];
 
-            let mut idx = 0;
-            let mut line_width_remain = width;
-
-            let line = &src_content.lines[row];
-
-            line.iter().for_each(|c| {
+            for c in src_line {
                 let render_term = RenderTerm::from_char(*c, tab_width);
-                let render_width = render_term.render_width;
-                render_line.terms.push(render_term);
+                let term_width = render_term.render_width;
 
-                if line_width_remain as i32 - (render_width as i32) < 0 {
-                    render_line.break_pos.push(idx);
-                    line_width_remain = width - render_width as u16;
+                if curr_render_line_width_remain as i32 - term_width as i32 >= 0 {
+                    terms.push(render_term);
+                    curr_render_line_width_remain -= term_width as u16;
                 } else {
-                    line_width_remain -= render_width as u16;
+                    // prepare new line
+                    if fill_rows == 0 {
+                        // 已经没有空间了
+                        break;
+                    }
+                    fill_rows -= 1;
+                    render_lines.push(RenderLine {
+                        terms: terms.clone(),
+                        src_line_index: row,
+                    });
+                    // 下一行
+                    terms.clear();
+                    curr_render_line_width_remain = width;
+                    //
+                    terms.push(render_term);
+                    curr_render_line_width_remain -= term_width as u16;
                 }
-                idx += 1;
-            });
+            }
 
-            let break_pos_len = render_line.break_pos.len();
-            render_lines.push(render_line);
-            if row + break_pos_len > end_row {
+            if fill_rows == 0 {
                 break;
             }
+
+            fill_rows -= 1;
+            render_lines.push(RenderLine {
+                terms: terms.clone(),
+                src_line_index: row,
+            });
+            terms.clear();
+            curr_render_line_width_remain = width;
         }
 
         RenderContent {
@@ -146,13 +166,60 @@ impl RenderContent {
         let render_lines = &self.lines;
         let mut tui_lines: Vec<Line> = vec![];
         for render_line in render_lines {
-            let RenderLine { terms, break_pos } = render_line;
-            if break_pos.is_empty() {
-                let spans: Vec<Span> = terms.iter().map(|term| term.to_span()).collect();
-                tui_lines.push(Line::from(spans));
-            }
+            let RenderLine {
+                terms,
+                src_line_index: _,
+            } = render_line;
+            let spans: Vec<Span> = terms.iter().map(|term| term.to_span()).collect();
+            tui_lines.push(Line::from(spans));
         }
         let paragraph = Paragraph::new(tui_lines);
         f.render_widget(paragraph, area);
+    }
+}
+
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_render_content1() {
+        let src_content = "hello\nworld.\niam\na\nvery\nhappy\nperson";
+        let content = Content::from(src_content);
+
+        assert_eq!(content.lines.len(), 7);
+        assert_eq!(content.line_feed, Some("\n".into()));
+
+        let viewport = Viewport {
+            width: 3,
+            height: 5,
+            ..Default::default()
+        };
+
+        let render_content =
+            RenderContent::from_src_content_with_view_break(&content, &viewport, 4);
+        assert_eq!(render_content.lines.len(), 5);
+        assert_eq!(render_content.lines[0].terms.len(), 3);
+    }
+    #[test]
+    fn test_render_content2() {
+        let src_content = r#"hello
+你好，我的世界
+im a happy boy"#;
+        let content = Content::from(src_content);
+        assert_eq!(content.lines.len(), 3);
+
+        let viewport = Viewport {
+            width: 3,
+            height: 5,
+            ..Default::default()
+        };
+
+        let render_content =
+            RenderContent::from_src_content_with_view_break(&content, &viewport, 4);
+        // ["hel", "lo", "你", "好", "，"]
+        assert_eq!(render_content.lines.len(), 5);
+        assert_eq!(render_content.lines[0].terms.len(), 3);
+        assert_eq!(render_content.lines[1].terms.len(), 2);
+        assert_eq!(render_content.lines[2].terms.len(), 1);
     }
 }
